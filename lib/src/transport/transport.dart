@@ -227,6 +227,7 @@ class SseClientTransport implements ClientTransport {
   final _messageController = StreamController<dynamic>.broadcast();
   final _closeCompleter = Completer<void>();
   final EventSource _eventSource = EventSource();
+  final HttpClient _httpClient; // Added shared HttpClient
   String? _messageEndpoint;
   StreamSubscription? _subscription;
   bool _isClosed = false;
@@ -235,7 +236,7 @@ class SseClientTransport implements ClientTransport {
   SseClientTransport._internal({
     required this.serverUrl,
     this.headers,
-  });
+  }) : _httpClient = HttpClient(); // Initialize HttpClient
 
   // Factory method for creation
   static Future<SseClientTransport> create({
@@ -253,6 +254,7 @@ class SseClientTransport implements ClientTransport {
 
       await transport._eventSource.connect(
           serverUrl,
+          // Removed passing of httpClient
           headers: headers,
           onOpen: (endpoint) {
             if (!endpointCompleter.isCompleted && endpoint != null) {
@@ -351,11 +353,12 @@ class SseClientTransport implements ClientTransport {
 
     try {
       final jsonMessage = jsonEncode(message);
-      _logger.debug('Sending message: $jsonMessage');
+      _logger.debug('Attempting to send message to endpoint: $_messageEndpoint');
+      _logger.debug('Message body: $jsonMessage');
 
       final url = Uri.parse(_messageEndpoint!);
-      final client = HttpClient();
-      final request = await client.postUrl(url);
+      // Use the shared _httpClient instead of creating a new one
+      final request = await _httpClient.postUrl(url);
 
       // Set headers
       request.headers.contentType = ContentType.json;
@@ -364,6 +367,10 @@ class SseClientTransport implements ClientTransport {
           request.headers.add(name, value);
         });
       }
+      request.persistentConnection = false; // Explicitly set persistentConnection to false
+
+      // Log headers before sending
+      _logger.debug('POST request headers: ${request.headers.toString()}');
 
       // Send the request
       request.write(jsonMessage);
@@ -380,8 +387,7 @@ class SseClientTransport implements ClientTransport {
         throw McpError('Error sending message: ${response.statusCode}');
       }
 
-      // Close the HTTP client
-      client.close();
+      // Do not close the shared _httpClient here; it's managed by the transport's lifecycle
       _logger.debug('Message sent successfully');
     } catch (e) {
       _logger.debug('Error sending message: $e');
@@ -403,12 +409,13 @@ class SseClientTransport implements ClientTransport {
     if (!_closeCompleter.isCompleted) {
       _closeCompleter.complete();
     }
+    _httpClient.close(force: true); // Close the shared HttpClient
   }
 }
 
 /// EventSource implementation for SSE
 class EventSource {
-  HttpClient? _client;
+  HttpClient? _client; // Reverted: EventSource manages its own client
   HttpClientRequest? _request;
   HttpClientResponse? _response;
   StreamSubscription? _subscription;
@@ -420,6 +427,7 @@ class EventSource {
 
   Future<void> connect(
       String url, {
+        // Removed httpClient parameter
         Map<String, String>? headers,
         Function(String?)? onOpen,
         Function(dynamic)? onMessage,
@@ -597,6 +605,7 @@ class EventSource {
     try {
       _client?.close(force: true);
     } catch (_) {}
+    _client = null;
 
     _isConnected = false;
   }

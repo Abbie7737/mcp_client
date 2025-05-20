@@ -245,7 +245,7 @@ class Client {
     _serverCapabilities = ServerCapabilities.fromJson(response['capabilities'] ?? {});
 
     // Send initialized notification
-    _sendNotification('initialized', {});
+    _sendNotification('notifications/initialized', {});
 
     _initialized = true;
     _logger.debug('Initialization complete');

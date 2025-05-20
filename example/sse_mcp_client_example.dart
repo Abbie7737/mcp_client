@@ -13,6 +13,7 @@ final Logger _logger = Logger.getLogger('sse_mcp_client_example');
 void main() async {
   // Configure logger level if still used alongside debugPrint
   _logger.setLevel(LogLevel.debug);
+  Logger.getLogger('mcp_client.transport').setLevel(LogLevel.debug); // Enable transport logs
 
   // Optional: Create a log file for persistent output, supplementing debugPrint
   final logFile = File('sse_mcp_client_example.log');
@@ -20,6 +21,7 @@ void main() async {
 
   _log('Starting SSE MCP client example...', logSink);
   print('[SSE Client] Starting SSE MCP client example...');
+  ServerInfo? _serverInfo; // To store server info for later use
 
   // Create an MCP client instance
   // The client's name and version are for identification purposes.
@@ -97,6 +99,7 @@ void main() async {
 
       // Register core event handlers BEFORE connecting
       client.onConnect.listen((ServerInfo serverInfo) {
+        _serverInfo = serverInfo; // Store server info
         _log('[SSE Client] onConnect: Connected to server: ${serverInfo.name} v${serverInfo.version} (MCP v${serverInfo.protocolVersion})', logSink);
         print('[SSE Client] onConnect: Connected to server: ${serverInfo.name} v${serverInfo.version} (MCP v${serverInfo.protocolVersion})');
 
@@ -106,58 +109,20 @@ void main() async {
         _log('[SSE Client] ServerInfo.capabilities toString: ${serverInfo.capabilities?.toString()}', logSink);
         print('[SSE Client] ServerInfo.capabilities toString: ${serverInfo.capabilities?.toString()}');
 
-        // Defensive check before casting and accessing
-        List<dynamic> tools = [];
-        if (serverInfo.capabilities?.tools is List) {
-          tools = (serverInfo.capabilities?.tools as List<dynamic>?) ?? [];
-        } else {
-          _log('[SSE Client] Warning: serverInfo.capabilities.tools is NOT a List. Actual type: ${serverInfo.capabilities?.tools?.runtimeType}, value: ${serverInfo.capabilities?.tools}', logSink);
-          print('[SSE Client] Warning: serverInfo.capabilities.tools is NOT a List. Actual type: ${serverInfo.capabilities?.tools?.runtimeType}, value: ${serverInfo.capabilities?.tools}');
-        }
-        
-        List<dynamic> resources = [];
-        if (serverInfo.capabilities?.resources is List) {
-          resources = (serverInfo.capabilities?.resources as List<dynamic>?) ?? [];
-        } else {
-          _log('[SSE Client] Warning: serverInfo.capabilities.resources is NOT a List. Actual type: ${serverInfo.capabilities?.resources?.runtimeType}, value: ${serverInfo.capabilities?.resources}', logSink);
-          print('[SSE Client] Warning: serverInfo.capabilities.resources is NOT a List. Actual type: ${serverInfo.capabilities?.resources?.runtimeType}, value: ${serverInfo.capabilities?.resources}');
-        }
+        // Check boolean capabilities for tools and resources
+        bool serverSupportsTools = serverInfo.capabilities?.tools == true;
+        bool serverSupportsResources = serverInfo.capabilities?.resources == true;
 
-        _log('\n--- [SSE Client] Tools from ServerInfo (${tools.length}) ---', logSink);
-        print('\n--- [SSE Client] Tools from ServerInfo (${tools.length}) ---');
-        if (tools.isEmpty) {
-          _log('[SSE Client] No tools listed in ServerInfo capabilities.', logSink);
-          print('[SSE Client] No tools listed in ServerInfo capabilities.');
-        } else {
-          for (final dynamic toolDynamic in tools) {
-            if (toolDynamic is Map<String, dynamic>) {
-              final tool = toolDynamic; // Now tool is Map<String, dynamic>
-              final toolInfo = '[SSE Client] ServerInfo Tool: ${tool['name']} - ${tool['description']} (Input Schema: ${tool['inputSchema']})';
-              _log(toolInfo, logSink);
-              print(toolInfo);
-            } else {
-              _log('[SSE Client] Warning: tool item in ServerInfo.capabilities.tools is not a Map: $toolDynamic', logSink);
-            }
-          }
-        }
+        _log('[SSE Client] ServerInfo: Supports tools: $serverSupportsTools', logSink);
+        print('[SSE Client] ServerInfo: Supports tools: $serverSupportsTools');
+        _log('[SSE Client] ServerInfo: Supports resources: $serverSupportsResources', logSink);
+        print('[SSE Client] ServerInfo: Supports resources: $serverSupportsResources');
 
-        _log('\n--- [SSE Client] Resources from ServerInfo (${resources.length}) ---', logSink);
-        print('\n--- [SSE Client] Resources from ServerInfo (${resources.length}) ---');
-        if (resources.isEmpty) {
-          _log('[SSE Client] No resources listed in ServerInfo capabilities.', logSink);
-          print('[SSE Client] No resources listed in ServerInfo capabilities.');
-        } else {
-          for (final dynamic resourceDynamic in resources) {
-             if (resourceDynamic is Map<String, dynamic>) {
-              final resource = resourceDynamic; // Now resource is Map<String, dynamic>
-              final resourceInfo = '[SSE Client] ServerInfo Resource: ${resource['name']} (URI: ${resource['uri']}, Type: ${resource['type']})';
-              _log(resourceInfo, logSink);
-              print(resourceInfo);
-            } else {
-              _log('[SSE Client] Warning: resource item in ServerInfo.capabilities.resources is not a Map: $resourceDynamic', logSink);
-            }
-          }
-        }
+        // The actual listing of tools and resources will be attempted later
+        // via client.listTools() and client.listResources().
+        // No need to parse them from ServerInfo here if they are just boolean flags.
+        _log('\n--- [SSE Client] ServerInfo capability flags processed. Explicit listing will follow. ---', logSink);
+        print('\n--- [SSE Client] ServerInfo capability flags processed. Explicit listing will follow. ---');
         if (!connectionEstablishedCompleter.isCompleted) {
           connectionEstablishedCompleter.complete();
         }
@@ -233,6 +198,16 @@ void main() async {
       await _listAvailableResources(client, logSink);
       _log('[SSE Client] POST-LIST-RESOURCES: Finished _listAvailableResources.', logSink);
       print('[SSE Client] POST-LIST-RESOURCES: Finished _listAvailableResources.');
+
+      // Verify all available tools if supported
+      if (_serverInfo != null && _serverInfo!.capabilities?.tools == true) {
+        _log('[SSE Client] Server supports tools. Proceeding to verify all available tools...', logSink);
+        print('[SSE Client] Server supports tools. Proceeding to verify all available tools...');
+        await _verifyAllAvailableTools(client, _serverInfo!, logSink);
+      } else {
+        _log('[SSE Client] Server does not support tools or serverInfo not available. Skipping tool verification.', logSink);
+        print('[SSE Client] Server does not support tools or serverInfo not available. Skipping tool verification.');
+      }
 
       // Example: Call a simple tool (e.g., an "echo" tool if the server supports it)
       // This helps verify that request-response over SSE is working.
@@ -450,6 +425,81 @@ Future<void> _readExampleResource(Client client, String resourceUri, IOSink logS
     _log('$errorMsg\nStackTrace: $s', logSink);
     print(errorMsg);
   }
+}
+
+/// Helper function to verify all available tools by calling them with an empty payload.
+Future<void> _verifyAllAvailableTools(Client client, ServerInfo serverInfo, IOSink? logSink) async {
+  _log('\n--- [SSE Client] Entering _verifyAllAvailableTools ---', logSink);
+  print('\n--- [SSE Client] Entering _verifyAllAvailableTools ---');
+
+  if (serverInfo.capabilities?.tools != true) {
+    _log('[SSE Client] Server does not support tools or capabilities check failed. Skipping tool verification.', logSink);
+    print('[SSE Client] Server does not support tools or capabilities check failed. Skipping tool verification.');
+    return;
+  }
+
+  _log('[SSE Client] Attempting to list tools for verification...', logSink);
+  print('[SSE Client] Attempting to list tools for verification...');
+  List<Tool> tools; // Corrected type to Tool
+  try {
+    tools = await client.listTools();
+    _log('[SSE Client] Successfully listed ${tools.length} tools for verification.', logSink);
+    print('[SSE Client] Successfully listed ${tools.length} tools for verification.');
+  } catch (e, s) {
+    final errorMsg = '[SSE Client] Error listing tools during verification: $e';
+    _log('$errorMsg\nStackTrace: $s', logSink);
+    print(errorMsg);
+    if (e is McpError) {
+      String mcpErrorDetails = '[SSE Client] McpError details in _verifyAllAvailableTools (listTools): ${e.toString()}';
+      _log(mcpErrorDetails, logSink);
+      print(mcpErrorDetails);
+    }
+    return; // Cannot proceed if listing tools fails
+  }
+
+  if (tools.isEmpty) {
+    _log('[SSE Client] No tools available from the server to verify.', logSink);
+    print('[SSE Client] No tools available from the server to verify.');
+    return;
+  }
+
+  _log('[SSE Client] Found ${tools.length} tools. Proceeding to call each one...', logSink);
+  print('[SSE Client] Found ${tools.length} tools. Proceeding to call each one...');
+
+  for (final tool in tools) {
+    _log('\n[SSE Client] Verifying tool: ${tool.name}', logSink);
+    print('\n[SSE Client] Verifying tool: ${tool.name}');
+    try {
+      _log('[SSE Client] Calling tool "${tool.name}" with empty payload {}...', logSink);
+      print('[SSE Client] Calling tool "${tool.name}" with empty payload {}...');
+      final result = await client.callTool(tool.name, {}); // Using an empty map
+
+      if (result.isError == true) {
+        final errorContent = result.content.isNotEmpty && result.content.first is TextContent
+            ? (result.content.first as TextContent).text
+            : (result.content.isNotEmpty ? "Non-TextContent error: ${result.content.first.runtimeType}" : "Unknown error structure or empty error content");
+        _log('[SSE Client] Error calling tool "${tool.name}": $errorContent', logSink);
+        print('[SSE Client] Error calling tool "${tool.name}": $errorContent');
+      } else {
+        final responseText = result.content.isNotEmpty && result.content.first is TextContent
+            ? (result.content.first as TextContent).text
+            : (result.content.isNotEmpty ? "Non-TextContent response: ${result.content.first.runtimeType}" : "Empty or non-standard response");
+        _log('[SSE Client] Tool "${tool.name}" call successful. Response (first content part): $responseText', logSink);
+        print('[SSE Client] Tool "${tool.name}" call successful. Response (first content part): $responseText');
+      }
+    } catch (e, s) {
+      final errorMsg = '[SSE Client] Exception calling tool "${tool.name}": $e';
+      _log('$errorMsg\nStackTrace: $s', logSink);
+      print(errorMsg);
+      if (e is McpError) {
+        String mcpErrorDetails = '[SSE Client] McpError details in _verifyAllAvailableTools (callTool ${tool.name}): ${e.toString()}';
+        _log(mcpErrorDetails, logSink);
+        print(mcpErrorDetails);
+      }
+    }
+  }
+  _log('\n--- [SSE Client] Finished _verifyAllAvailableTools ---', logSink);
+  print('\n--- [SSE Client] Finished _verifyAllAvailableTools ---');
 }
 
 
