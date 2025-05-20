@@ -370,7 +370,7 @@ class SseClientTransport implements ClientTransport {
       final response = await request.close();
 
       // Just check for successful delivery
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 202) {
         final responseBody = await response.transform(utf8.decoder).join();
         _logger.debug('Message delivery confirmation: $responseBody');
         // Don't forward this to message controller, actual response comes via SSE
